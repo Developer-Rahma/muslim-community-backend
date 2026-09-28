@@ -1,0 +1,168 @@
+import Group from "../../models/Group/group.model.js";
+
+export const createGroup = async (req, res) => {
+  try {
+    const { name, description, joinOption, members } = req.body;
+    const image = req.file ? req.file.path : null;
+
+    // Ensure the creator (Admin) is in the list
+    const creator = { user: req.user._id, role: "admin" };
+    console.log("///////////////////");
+    console.log(creator);
+    const alreadyExists = members?.some(
+      (item) => String(item.user) === String(req.user._id)
+    );
+
+    console.log(members);
+    console.log(alreadyExists);
+    if (alreadyExists) {
+      return res
+        .status(400)
+        .json({ message: "User is already in the members list" });
+    }
+    const finalMembers = members ? [...members, creator] : [creator];
+
+    const group = await Group.create({
+      name,
+      description,
+      image,
+      joinOption,
+      createdBy: req.user._id,
+      members: finalMembers,
+    });
+
+    res.status(201).json(group);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const addMemberToGroup = async (groupId, userId, role = "member") => {
+  const group = await Group.findById(groupId);
+
+  if (!group) throw new Error("Group not found");
+
+  const alreadyMember = group.members.some(
+    (m) => m.user.toString() === userId.toString()
+  );
+
+  if (alreadyMember) throw new Error("User is already a member of this group");
+
+  group.members.push({ user: userId, role });
+  await group.save();
+
+  return group;
+};
+
+export const getSingleGroup = async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id).populate(
+      "members.user",
+      "-password"
+    );
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    res.status(200).json(group);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Get all groups (paginated)
+export const getAllGroups = async (req, res) => {
+  try {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 3;
+    const skip = (page - 1) * limit;
+    const search = req.query.search || "";
+
+    const filter = search
+      ? {
+          $or: [
+            { name: { $regex: search, $options: "i" } }, // case-insensitive
+            { description: { $regex: search, $options: "i" } },
+          ],
+        }
+      : {};
+
+    const [groups, total] = await Promise.all([
+      Group.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Group.countDocuments(filter),
+    ]);
+
+    res.json({
+      groups,
+      page,
+      totalPages: Math.ceil(total / limit),
+      total,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+
+export const joinGroup = async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (
+      group.members.some(
+        (member) => member.user.toString() === req.user._id.toString()
+      )
+    )
+      return res.status(400).json({
+        message: "User already a member of this group ",
+      });
+    group.members.push({ user: req.user._id, role: "member" });
+    await group.save();
+    res.json(group);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const leaveGroup = async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    console.log(group);
+    group.members = group.members.filter(
+      (member) => member.user.toString() !== req.user._id.toString()
+    );
+    await group.save();
+    res.json({ message: "Left group" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const getUserGroups = async (req, res) => {
+  try {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 3;
+    const skip = (page - 1) * limit;
+    const baseFilter = { "members.user" : req.user._id}
+    const search = req.query.search || "";
+    const searchFilter = search ? {
+      $or : [
+        { name : { $regex : search , $options:"i"} },
+        { description : { $regex : search ,$options:"i"}}
+      ] ,
+    } : {}
+    const finalFilter = {...baseFilter , ...searchFilter}
+    const [groups, total] = await Promise.all([
+      Group.find(finalFilter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Group.countDocuments(finalFilter),
+    ]);
+
+    res.json({ groups, page, totalPages: Math.ceil(total / limit) });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
